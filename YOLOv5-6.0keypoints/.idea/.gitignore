@@ -1,4 +1,6 @@
 # Default ignored files
 /shelf/
 /workspace.xml
-../.idea/
+/modules.xml
+/vcs.xml
+/YOLOv5-6.0keypoints.iml
