@@ -552,9 +552,9 @@ class LoadImagesAndLabels(Dataset):
             img, labels = load_mosaic(self, index)
             shapes = None
 
-            # # MixUp augmentation
-            # if random.random() < hyp['mixup']:
-            #     img, labels = mixup(img, labels, *load_mosaic(self, random.randint(0, self.n - 1)))
+            # MixUp augmentation
+            if random.random() < hyp['mixup']:
+                 img, labels = mixup(img, labels, *load_mosaic(self, random.randint(0, self.n - 1)))
 
         else:
             # Load image
@@ -813,12 +813,18 @@ def load_mosaic9(self, index):
         x1, y1, x2, y2 = [max(x, 0) for x in c]  # allocate coords
 
         # Labels
-        labels, segments = self.labels[index].copy(), self.segments[index].copy()
-        if labels.size:
-            labels[:, 1:] = xywhn2xyxy(labels[:, 1:], w, h, padx, pady)  # normalized xywh to pixel xyxy format
-            segments = [xyn2xy(x, w, h, padx, pady) for x in segments]
-        labels9.append(labels)
-        segments9.extend(segments)
+        if i != negative_block:
+            labels, segments = self.labels[index].copy(), self.segments[index].copy()
+
+            labels[:, [1, 3, 5, 7]] *= w
+            labels[:, [2, 4, 6, 8]] *= h
+
+            if labels.size:
+                labels[:, [1, 3, 5, 7]] += padx
+                labels[:, [2, 4, 6, 8]] += pady
+                segments = [xyn2xy(x, w, h, padw, padh) for x in segments]
+            labels9.append(labels)
+            segments9.extend(segments)
 
         # Image
         img9[y1:y2, x1:x2] = img[y1 - pady:, x1 - padx:]  # img9[ymin:ymax, xmin:xmax]
@@ -830,14 +836,20 @@ def load_mosaic9(self, index):
 
     # Concat/clip labels
     labels9 = np.concatenate(labels9, 0)
-    labels9[:, [1, 3]] -= xc
-    labels9[:, [2, 4]] -= yc
-    c = np.array([xc, yc])  # centers
-    segments9 = [x - c for x in segments9]
 
-    for x in (labels9[:, 1:], *segments9):
-        np.clip(x, 0, 2 * s, out=x)  # clip when using random_perspective()
-    # img9, labels9 = replicate(img9, labels9)  # replicate
+    cx = np.mean(labels4[:, [1, 3, 5, 7]], axis=1)
+    cy = np.mean(labels4[:, [2, 4, 6, 8]], axis=1)
+    i = (0 <= cx) & (cx <= s * 3) & (0 <= cy) & (cy <= s * 3)
+    labels9 = labels9[i]
+
+    # labels9[:, [1, 3]] -= xc
+    # labels9[:, [2, 4]] -= yc
+    # c = np.array([xc, yc])  # centers
+    # segments9 = [x - c for x in segments9]
+    #
+    # for x in (labels9[:, 1:], *segments9):
+    #     np.clip(x, 0, 2 * s, out=x)  # clip when using random_perspective()
+    # # img9, labels9 = replicate(img9, labels9)  # replicate
 
     # Augment
     img9, labels9 = random_perspective(img9, labels9, segments9,
