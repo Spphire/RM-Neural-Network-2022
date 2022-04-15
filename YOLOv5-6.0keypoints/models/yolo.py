@@ -37,10 +37,10 @@ class Detect(nn.Module):
     stride = None  # strides computed during build
     onnx_dynamic = False  # ONNX export parameter
 
-    def __init__(self, nc=36, anchors=(), ch=(), inplace=True):  # detection layer
+    def __init__(self, nc=36, anchors=(), ch=(), inplace=True, np=4):  # detection layer
         super().__init__()
         self.nc = nc  # number of classes
-        self.no = nc + 9  # number of outputs per anchor
+        self.no = nc + np*2 +1  # number of outputs per anchor
         self.nl = len(anchors)  # number of detection layers
         self.na = len(anchors[0]) // 2  # number of anchors
         self.grid = [torch.zeros(1)] * self.nl  # init grid
@@ -70,7 +70,7 @@ class Detect(nn.Module):
                 if self.grid[i].shape[2:4] != x[i].shape[2:4] or self.onnx_dynamic:
                     self.grid[i], self.anchor_grid[i] = self._make_grid(nx, ny, i)
                     
-                pt0, pt1, pt2, pt3, cls = x[i].split([2, 2, 2, 2, 1 + self.nc], dim=4)
+                pt0, pt1, pt2, pt3, cls = x[i].split([*[2] * np, 1 + self.nc], dim=4)
 
                 if self.training:
                     pt0 = pt0 * self.anchor_grid[i] / self.stride[i] + self.grid[i]
