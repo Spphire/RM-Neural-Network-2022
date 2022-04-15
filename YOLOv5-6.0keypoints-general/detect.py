@@ -215,12 +215,12 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
                 #print(p[..., :8].numpy())
                 xmin = torch.min(p[..., 0:nums:2], dim=1).values.int().numpy()
                 xmax = torch.max(p[..., 0:nums:2], dim=1).values.int().numpy()
-                ymin = torch.min(p[..., 0:nums:2], dim=1).values.int().numpy()
-                ymax = torch.max(p[..., 0:nums:2], dim=1).values.int().numpy()
+                ymin = torch.min(p[..., 1:nums:2], dim=1).values.int().numpy()
+                ymax = torch.max(p[..., 1:nums:2], dim=1).values.int().numpy()
                 bbox = [[int(x1), int(y1), int(x2-x1), int(y2-y1)] for x1, x2, y1, y2 in zip(xmin, xmax, ymin, ymax)]
                 conf = [float(c) for c in p[..., nums].numpy()]
                 cls_color = torch.argmax(p[..., nums+1:nums+1+colors], dim=-1).numpy()
-                cls_number = torch.argmax(p[..., nums+1+4:nums+1+colors+tags], dim=-1).numpy()
+                cls_number = torch.argmax(p[..., nums+1+colors:nums+1+colors+tags], dim=-1).numpy()
                 cls = cls_color * tags + cls_number
                 ids = cv2.dnn.NMSBoxes(bbox, conf, opt.conf_thres, opt.iou_thres)
                 p = torch.stack([
