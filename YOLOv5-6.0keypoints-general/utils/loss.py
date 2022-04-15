@@ -115,28 +115,33 @@ class ComputeLoss:
         for k in 'na', 'nc', 'nl', 'anchors':
             setattr(self, k, getattr(det, k))
 
-    def __call__(self, p, targets):  # predictions, targets, model
+    def __call__(self, p, targets, cls1, cls2):  # predictions, targets, model
         device = targets.device
         lcls, lbox, lpts, lobj = torch.zeros(1, device=device), torch.zeros(1, device=device), torch.zeros(1, device=device), torch.zeros(1, device=device)
         tcls, tbox, tpts, indices, anchors = self.build_targets(p, targets)  # targets
 
+        # print("l")
+        # print(targets.shape)
+        nums=(int)(targets.shape[1]-2)
+        
         # Losses
         for i, pi in enumerate(p):  # layer index, layer predictions
             b, a, gj, gi = indices[i]  # image, anchor, gridy, gridx
             tobj = torch.zeros_like(pi[..., 0], device=device)  # target obj
+            
 
             n = b.shape[0]  # number of targets
             if n:
                 ps = pi[b, a, gj, gi]  # prediction subset corresponding to targets
 
-                ppts = ps[:, :8]
-                pxmin = torch.min(ppts[:, [0, 2, 4, 6]], dim=1).values
-                pxmax = torch.max(ppts[:, [0, 2, 4, 6]], dim=1).values
-                pymin = torch.min(ppts[:, [1, 3, 5, 7]], dim=1).values
-                pymax = torch.max(ppts[:, [1, 3, 5, 7]], dim=1).values
+                ppts = ps[:, :nums]
+                pxmin = torch.min(ppts[:, 0::2], dim=1).values
+                pxmax = torch.max(ppts[:, 0::2], dim=1).values
+                pymin = torch.min(ppts[:, 1::2], dim=1).values
+                pymax = torch.max(ppts[:, 1::2], dim=1).values
 
-                px = torch.mean(ppts[:, [0, 2, 4, 6]], dim=1)
-                py = torch.mean(ppts[:, [1, 3, 5, 7]], dim=1)
+                px = torch.mean(ppts[:, 0::2], dim=1)
+                py = torch.mean(ppts[:, 1::2], dim=1)
                 pw = pxmax - pxmin
                 ph = pymax - pymin
 
@@ -156,18 +161,18 @@ class ComputeLoss:
 
                 # Classification
                 if self.nc > 1:  # cls loss (only if multiple classes)
-                    t = torch.full_like(ps[:, 9:], self.cn, device=device)  # targets
-                    tcls_color = tcls[i] // 9
-                    tcls_number = tcls[i] % 9
+                    t = torch.full_like(ps[:, nums+1:], self.cn, device=device)  # targets
+                    tcls_color = tcls[i] // cls2
+                    tcls_number = tcls[i] % cls2
                     t[range(n), tcls_color] = self.cp
-                    t[range(n), tcls_number + 4] = self.cp
-                    lcls += self.BCEcls(ps[:, 9:], t)  # BCE
+                    t[range(n), tcls_number + cls1] = self.cp
+                    lcls += self.BCEcls(ps[:, nums+1:], t)  # BCE
 
                 # Append targets to text file
                 # with open('targets.txt', 'a') as file:
                 #     [file.write('%11.5g ' * 4 % tuple(x) + '\n') for x in torch.cat((txy[i], twh[i]), 1)]
 
-            obji = self.BCEobj(pi[..., 8], tobj)
+            obji = self.BCEobj(pi[..., nums], tobj)
             lobj += obji * self.balance[i]  # obj loss
             if self.autobalance:
                 self.balance[i] = self.balance[i] * 0.9999 + 0.0001 / obji.detach().item()
@@ -185,9 +190,12 @@ class ComputeLoss:
 
     def build_targets(self, p, targets):
         # Build targets for compute_loss(), input targets(image,class,x,y,w,h)
+        # print("b")
+        # print(targets.shape)
+        num_pts=(targets.shape[1]-2)//2
         na, nt = self.na, targets.shape[0]  # number of anchors, targets
         tcls, tbox, tpts, indices, anch = [], [], [], [], []
-        gain = torch.ones(11, device=targets.device)  # normalized to gridspace gain
+        gain = torch.ones(num_pts*2+3, device=targets.device)  # normalized to gridspace gain
         ai = torch.arange(na, device=targets.device).float().view(na, 1).repeat(1, nt)  # same as .repeat_interleave(nt)
         targets = torch.cat((targets.repeat(na, 1, 1), ai[:, :, None]), 2)  # append anchor indices
 
@@ -199,16 +207,17 @@ class ComputeLoss:
 
         for i in range(self.nl):
             anchors = self.anchors[i]
-            gain[2:10] = torch.tensor(p[i].shape)[[3, 2, 3, 2, 3, 2, 3, 2]]  # xyxy gain
-
+            gain[2:num_pts*2+2] = torch.tensor(p[i].shape)[[3, 2] * num_pts]  # xyxy gain
+            
             # Match targets to anchors
+            #print(targets.shape,gain.shape)
             t = targets * gain
             if nt:
                 # Matches
-                txmin = torch.min(t[:, :, [2, 4, 6, 8]], dim=2).values
-                txmax = torch.max(t[:, :, [2, 4, 6, 8]], dim=2).values
-                tymin = torch.min(t[:, :, [3, 5, 7, 9]], dim=2).values
-                tymax = torch.max(t[:, :, [3, 5, 7, 9]], dim=2).values
+                txmin = torch.min(t[:, :, 2::2], dim=2).values
+                txmax = torch.max(t[:, :, 2::2], dim=2).values
+                tymin = torch.min(t[:, :, 3::2], dim=2).values
+                tymax = torch.max(t[:, :, 3::2], dim=2).values
                 twh = torch.stack([txmax - txmin, tymax - tymin], dim=2)
 
                 r = twh / anchors[:, None]  # wh ratio
@@ -217,8 +226,8 @@ class ComputeLoss:
                 t = t[j]  # filter
 
                 # Offsets
-                gx = torch.mean(t[:, [2, 4, 6, 8]], dim=1)
-                gy = torch.mean(t[:, [3, 5, 7, 9]], dim=1)
+                gx = torch.mean(t[:, 2::2], dim=1)
+                gy = torch.mean(t[:, 3::2], dim=1)
                 gxy = torch.stack([gx, gy], dim=1)
                 gxi = gain[[2, 3]] - gxy  # inverse
                 j, k = ((gxy % 1. < g) & (gxy > 1.)).T
@@ -232,25 +241,25 @@ class ComputeLoss:
 
             # Define
             b, c = t[:, :2].long().T  # image, class
-            gx = torch.mean(t[:, [2, 4, 6, 8]], dim=1)
-            gy = torch.mean(t[:, [3, 5, 7, 9]], dim=1)
+            gx = torch.mean(t[:, 2::2], dim=1)
+            gy = torch.mean(t[:, 3::2], dim=1)
             gxy = torch.stack([gx, gy], dim=1)
 
             if t.shape[0] > 0:
-                xmin = torch.min(t[:, [2, 4, 6, 8]], dim=1).values
-                xmax = torch.max(t[:, [2, 4, 6, 8]], dim=1).values
-                ymin = torch.min(t[:, [3, 5, 7, 9]], dim=1).values
-                ymax = torch.max(t[:, [3, 5, 7, 9]], dim=1).values
+                xmin = torch.min(t[:, 2::2], dim=1).values
+                xmax = torch.max(t[:, 2::2], dim=1).values
+                ymin = torch.min(t[:, 3::2], dim=1).values
+                ymax = torch.max(t[:, 3::2], dim=1).values
                 gwh = torch.stack([xmax - xmin, ymax - ymin], dim=1)
             else:
                 gwh = torch.zeros([0, 2], device=targets.device)
             gij = (gxy - offsets).long()
             gi, gj = gij.T  # grid xy indices
 
-            gpts = t[:, 2:10]
+            gpts = t[:, 2:num_pts*2+2]
 
             # Append
-            a = t[:, 10].long()  # anchor indices
+            a = t[:, num_pts*2+2].long()  # anchor indices
             indices.append((b, a, gj.clamp_(0, gain[3] - 1), gi.clamp_(0, gain[2] - 1)))  # image, anchor, grid indices
             tbox.append(torch.cat((gxy, gwh), 1))  # box
             tpts.append(gpts)

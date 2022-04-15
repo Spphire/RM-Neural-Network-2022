@@ -14,7 +14,7 @@
         --cfg models/yolov5n.yaml                     # 网络结构定义
         --data ~/Data//4-9homo/armor.yaml             # 训练数据文件
         --hyp data/hyp.scratch.yaml                   # 训练参数文件
-        --epochs 1000                                 # 训练500代(根据实际情况修改)
+        --epochs 1000                                 # 训练1000代(根据实际情况修改)
         --batch-size 16                               # 单次数据量(报错显存不足则需要降低)
         --img-size 640                                # 训练图片大小
         --noval                                       # 关闭模型评估(4点模型val的代码没有做修改，用不了)

@@ -93,7 +93,7 @@ def exif_transpose(image):
 
 
 def create_dataloader(path, negative_path_list, imgsz, batch_size, stride, single_cls=False, hyp=None, augment=False, cache=False, pad=0.0,
-                      rect=False, rank=-1, workers=8, image_weights=False, quad=False, prefix=''):
+                      rect=False, rank=-1, workers=8, image_weights=False, quad=False, prefix='', numpoints=4):
     # Make sure only the first process in DDP process the dataset first, and the following others can use the cache
     with torch_distributed_zero_first(rank):
         dataset = LoadImagesAndLabels(path, negative_path_list, imgsz, batch_size,
@@ -105,7 +105,7 @@ def create_dataloader(path, negative_path_list, imgsz, batch_size, stride, singl
                                       stride=int(stride),
                                       pad=pad,
                                       image_weights=image_weights,
-                                      prefix=prefix)
+                                      prefix=prefix, numpoints=numpoints)
 
     batch_size = min(batch_size, len(dataset))
     nw = min([os.cpu_count(), batch_size if batch_size > 1 else 0, workers])  # number of workers
@@ -378,7 +378,7 @@ class LoadImagesAndLabels(Dataset):
     cache_version = 0.5  # dataset labels *.cache version
 
     def __init__(self, path, negative_path_list=None, img_size=640, batch_size=16, augment=False, hyp=None, rect=False, image_weights=False,
-                 cache_images=False, single_cls=False, stride=32, pad=0.0, prefix=''):
+                 cache_images=False, single_cls=False, stride=32, pad=0.0, prefix='', numpoints=4):
         self.img_size = img_size
         self.augment = augment
         self.hyp = hyp
@@ -390,6 +390,8 @@ class LoadImagesAndLabels(Dataset):
         self.path = path
         self.albumentations = Albumentations() if augment else None
         self.negative_set = []
+        self.numpoints=numpoints
+        
         for negative_path in negative_path_list if negative_path_list is not None else []:
             self.negative_set.extend([f"{negative_path}/{fn}" for fn in os.listdir(negative_path)])
 
@@ -503,7 +505,7 @@ class LoadImagesAndLabels(Dataset):
         nm, nf, ne, nc, msgs = 0, 0, 0, 0, []  # number missing, found, empty, corrupt, messages
         desc = f"{prefix}Scanning '{path.parent / path.stem}' images and labels..."
         with Pool(NUM_THREADS) as pool:
-            pbar = tqdm(pool.imap(verify_image_label, zip(self.img_files, self.label_files, repeat(prefix))),
+            pbar = tqdm(pool.imap(verify_image_label, zip(self.img_files, self.label_files, repeat(prefix), self.numpoints)),
                         desc=desc, total=len(self.img_files))
             for im_file, l, shape, segments, nm_f, nf_f, ne_f, nc_f, msg in pbar:
                 nm += nm_f
@@ -567,8 +569,8 @@ class LoadImagesAndLabels(Dataset):
 
             labels = self.labels[index].copy()
             if labels.size:  # normalized xywh to pixel xyxy format
-                labels[:, [2, 4, 6, 8]] *= img.shape[0]  # unnormalized height 0-1
-                labels[:, [1, 3, 5, 7]] *= img.shape[1]  # unnormalized width 0-1
+                labels[:, 2::2] *= img.shape[0]  # unnormalized height 0-1
+                labels[:, 1::2] *= img.shape[1]  # unnormalized width 0-1
 
             if self.augment:
                 img, labels = random_perspective(img, labels,
@@ -581,8 +583,8 @@ class LoadImagesAndLabels(Dataset):
         nl = len(labels)  # number of labels
         if nl:
             # labels[:, 1:9] = xyxy2xywhn(labels[:, 1:9], w=img.shape[1], h=img.shape[0], clip=True, eps=1E-3)
-            labels[:, [2, 4, 6, 8]] /= img.shape[0]  # normalized height 0-1
-            labels[:, [1, 3, 5, 7]] /= img.shape[1]  # normalized width 0-1
+            labels[:, 2::2] /= img.shape[0]  # normalized height 0-1
+            labels[:, 1::2] /= img.shape[1]  # normalized width 0-1
 
         if self.augment:
             # Albumentations
@@ -626,9 +628,9 @@ class LoadImagesAndLabels(Dataset):
         #             # cv2.putText(im0, f"{torch.sigmoid(d[8]).item():.2f}", pt3, 1, 1, (0, 255, 0))
         # cv2.imwrite('runs/trash/1.jpg', im0)
         
-        labels_out = torch.zeros((nl, 10))
+        labels_out = torch.zeros((nl, self.numpoints*2+2))
         if nl:
-            labels_out[:, 1:] = torch.from_numpy(labels)
+            labels_out[:, 1:] = torch.from_numpy(labels[:, :self.numpoints*2+1])
 
         # Convert
         img = img.transpose((2, 0, 1))[::-1]  # HWC to CHW, BGR to RGB
@@ -742,12 +744,12 @@ def load_mosaic(self, index):
         if i != negative_block:
             labels, segments = self.labels[index].copy(), self.segments[index].copy()
 
-            labels[:, [1, 3, 5, 7]] *= w
-            labels[:, [2, 4, 6, 8]] *= h
+            labels[:, 1::2] *= w
+            labels[:, 2::2] *= h
 
             if labels.size:
-                labels[:, [1, 3, 5, 7]] += padw
-                labels[:, [2, 4, 6, 8]] += padh
+                labels[:, 1::2] += padw
+                labels[:, 2::2] += padh
                 segments = [xyn2xy(x, w, h, padw, padh) for x in segments]
             labels4.append(labels)
             segments4.extend(segments)
@@ -759,8 +761,8 @@ def load_mosaic(self, index):
     # img4, labels4 = replicate(img4, labels4)  # replicate
     
     # Remove out of range   
-    cx = np.mean(labels4[:, [1, 3, 5, 7]], axis=1)
-    cy = np.mean(labels4[:, [2, 4, 6, 8]], axis=1)
+    cx = np.mean(labels4[:, 1::2], axis=1)
+    cy = np.mean(labels4[:, 2::2], axis=1)
     i = (0 <= cx) & (cx <= s*2) & (0 <= cy) & (cy <= s*2)
     labels4 = labels4[i]
     
@@ -938,7 +940,7 @@ def autosplit(path='../datasets/coco128/images', weights=(0.9, 0.1, 0.0), annota
 
 def verify_image_label(args):
     # Verify one image-label pair
-    im_file, lb_file, prefix = args
+    im_file, lb_file, prefix, numpoints = args
     nm, nf, ne, nc, msg, segments = 0, 0, 0, 0, '', []  # number (missing, found, empty, corrupt), message, segments
     try:
         # verify images
@@ -965,16 +967,17 @@ def verify_image_label(args):
                 #     l = np.concatenate((classes.reshape(-1, 1), segments2boxes(segments)), 1)  # (cls, xywh)
                 l = np.array(l, dtype=np.float32)
             if len(l):
-                assert l.shape[1] == 9, 'labels require 5 columns each'
-                assert (l >= -0.3).all(), 'negative labels'
+                assert l.shape[1] % 2 == 1, 'labels require 5 columns each'
+                assert (l[:, 1] >= 0).all(), 'negative labels'
+                assert (l[:, 1:] >= -0.3).all(), 'negative labels'
                 assert (l[:, 1:] <= 1.3).all(), 'non-normalized or out of bounds coordinate labels'
                 assert np.unique(l, axis=0).shape[0] == l.shape[0], 'duplicate labels'
             else:
                 ne = 1  # label empty
-                l = np.zeros((0, 9), dtype=np.float32)
+                l = np.zeros((0, numpoints*2+1), dtype=np.float32)
         else:
             nm = 1  # label missing
-            l = np.zeros((0, 9), dtype=np.float32)
+            l = np.zeros((0, numpoints*2+1), dtype=np.float32)
         return im_file, l, shape, segments, nm, nf, ne, nc, msg
     except Exception as e:
         nc = 1

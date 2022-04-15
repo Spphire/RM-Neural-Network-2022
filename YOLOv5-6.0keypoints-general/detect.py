@@ -57,6 +57,9 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
         hide_conf=False,  # hide confidences
         half=False,  # use FP16 half-precision inference
         dnn=False,  # use OpenCV DNN for ONNX inference
+        num_points=4,
+        colors=4,
+        tags=9,
         ):
     source = str(source)
     save_img = not nosave and not source.endswith('.txt')  # save inference images
@@ -132,6 +135,20 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
     if pt and device.type != 'cpu':
         model(torch.zeros(1, 3, *imgsz).to(device).type_as(next(model.parameters())))  # run once
     dt, seen = [0.0, 0.0, 0.0], 0
+  
+    try:
+        nums = model.np*2
+    except AttributeError as e:
+        nums = opt.num_points*2
+    try:
+        colors = model.colors
+    except AttributeError as e:
+        colors = opt.colors
+    try:
+        tags = model.tags
+    except AttributeError as e:
+        tags = opt.tags
+
     for path, img, im0s, vid_cap in dataset:
         t1 = time_sync()
         if onnx:
@@ -191,24 +208,24 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
         #pred = non_max_suppression(pred, conf_thres, iou_thres, classes, agnostic_nms, max_det=max_det)
         pred = []
         for p in pred_raw:
-            mask = p[..., 8] > opt.conf_thres
+            mask = p[..., nums] > opt.conf_thres
             # print(torch.max(p[..., 8]).detach().cpu().item())
             p = p[mask]
             if p.shape[0] > 0:
                 #print(p[..., :8].numpy())
-                xmin = torch.min(p[..., [0, 2, 4, 6]], dim=1).values.int().numpy()
-                xmax = torch.max(p[..., [0, 2, 4, 6]], dim=1).values.int().numpy()
-                ymin = torch.min(p[..., [1, 3, 5, 7]], dim=1).values.int().numpy()
-                ymax = torch.max(p[..., [1, 3, 5, 7]], dim=1).values.int().numpy()
+                xmin = torch.min(p[..., 0:nums:2], dim=1).values.int().numpy()
+                xmax = torch.max(p[..., 0:nums:2], dim=1).values.int().numpy()
+                ymin = torch.min(p[..., 0:nums:2], dim=1).values.int().numpy()
+                ymax = torch.max(p[..., 0:nums:2], dim=1).values.int().numpy()
                 bbox = [[int(x1), int(y1), int(x2-x1), int(y2-y1)] for x1, x2, y1, y2 in zip(xmin, xmax, ymin, ymax)]
-                conf = [float(c) for c in p[..., 8].numpy()]
-                cls_color = torch.argmax(p[..., 9:13], dim=-1).numpy()
-                cls_number = torch.argmax(p[..., 13:22], dim=-1).numpy()
-                cls = cls_color * 9 + cls_number
+                conf = [float(c) for c in p[..., nums].numpy()]
+                cls_color = torch.argmax(p[..., nums+1:nums+1+colors], dim=-1).numpy()
+                cls_number = torch.argmax(p[..., nums+1+4:nums+1+colors+tags], dim=-1).numpy()
+                cls = cls_color * tags + cls_number
                 ids = cv2.dnn.NMSBoxes(bbox, conf, opt.conf_thres, opt.iou_thres)
                 p = torch.stack([
                     torch.cat([
-                        torch.tensor(p[i, :8]).float(), torch.tensor([conf[i]]).float(), torch.tensor([cls[i]]).float()
+                        torch.tensor(p[i, :nums]).float(), torch.tensor([conf[i]]).float(), torch.tensor([cls[i]]).float()
                     ], dim=0)
                     for i in ids.reshape(ids.shape[0])
                 ], dim=0)
@@ -236,39 +253,22 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
             annotator = Annotator(im0, line_width=line_thickness, example=str(names))
             if len(det):
                 # Rescale boxes from img_size to im0 size
-                det[:, :8] = scale_coords(img.shape[2:], det[:, :8], im0.shape).round()
+                det[:, :nums] = scale_coords(img.shape[2:], det[:, :nums], im0.shape).round()
 
                 # Print results
                 for c in det[:, -1].unique():
                     n = (det[:, -1] == c).sum()  # detections per class
                     s += f"{n} {names[int(c)]}{'s' * (n > 1)}, "  # add to string
 
-                # Write results
-                # for *xyxy, conf, cls in reversed(det):
-                #     if save_txt:  # Write to file
-                #         xywh = (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(-1).tolist()  # normalized xywh
-                #         line = (cls, *xywh, conf) if save_conf else (cls, *xywh)  # label format
-                #         with open(txt_path + '.txt', 'a') as f:
-                #             f.write(('%g ' * len(line)).rstrip() % line + '\n')
-
-                #     if save_img or save_crop or view_img:  # Add bbox to image
-                #         c = int(cls)  # integer class
-                #         label = None if hide_labels else (names[c] if hide_conf else f'{names[c]} {conf:.2f}')
-                #         annotator.box_label(xyxy, label, color=colors(c, True))
-                #         if save_crop:
-                #             save_one_box(xyxy, imc, file=save_dir / 'crops' / names[c] / f'{p.stem}.jpg', BGR=True)
                 for d in det:
                     pt0 = (int(d[0]), int(d[1]))
-                    pt1 = (int(d[2]), int(d[3]))
-                    pt2 = (int(d[4]), int(d[5]))
-                    pt3 = (int(d[6]), int(d[7]))
-                    cv2.line(im0, pt0, pt1, (0, 255, 0), 2)
-                    cv2.line(im0, pt1, pt2, (0, 255, 0), 2)
-                    cv2.line(im0, pt2, pt3, (0, 255, 0), 2)
-                    cv2.line(im0, pt3, pt0, (0, 255, 0), 2)
+                    pt_1 = (int(d[nums-2]), int(d[nums-1]))
+                    for k in range((nums//2)-1):
+                        cv2.line(im0, (int(d[2*k]), int(d[2*k+1])), (int(d[2*k+2]), int(d[2*k+3])), (0, 255, 0), 2, lineType=cv2.LINE_AA)
+                    cv2.line(im0, pt_1, pt0, (0, 255, 0), 2, lineType=cv2.LINE_AA)
                     print(d[-1])
                     cv2.putText(im0, names[int(d[-1])], pt0, 1, 1, (0, 255, 0))
-                    cv2.putText(im0, f"{torch.sigmoid(d[8]).item():.2f}", pt3, 1, 1, (0, 255, 0))
+                    cv2.putText(im0, f"{torch.sigmoid(d[nums]).item():.2f}", pt_1, 1, 1, (0, 255, 0))
 
             # Print time (inference-only)
             print(f'{s}Done. ({t3 - t2:.3f}s)')
@@ -310,7 +310,7 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
 
 def parse_opt():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--weights', nargs='+', type=str, default='runs/train/exp/weights/best-cut.pt', help='model path(s)')
+    parser.add_argument('--weights', nargs='+', type=str, default='/cluster/home/it_stu4/Workspace/YOLOv5-6.0keypoints/runs/train/cls/weights/best.pt', help='model path(s)')
     parser.add_argument('--source', type=str, default='data/images', help='file/dir/URL/glob, 0 for webcam')
     parser.add_argument('--imgsz', '--img', '--img-size', nargs='+', type=int, default=[640], help='inference size h,w')
     parser.add_argument('--conf-thres', type=float, default=0.25, help='confidence threshold')
@@ -335,6 +335,9 @@ def parse_opt():
     parser.add_argument('--hide-conf', default=False, action='store_true', help='hide confidences')
     parser.add_argument('--half', action='store_true', help='use FP16 half-precision inference')
     parser.add_argument('--dnn', action='store_true', help='use OpenCV DNN for ONNX inference')
+    parser.add_argument('--num-points', type=int, default=4, help='')
+    parser.add_argument('--colors', type=int, default=4, help='')
+    parser.add_argument('--tags', type=int, default=9, help='')
     opt = parser.parse_args()
     opt.imgsz *= 2 if len(opt.imgsz) == 1 else 1  # expand
     print_args(FILE.stem, opt)

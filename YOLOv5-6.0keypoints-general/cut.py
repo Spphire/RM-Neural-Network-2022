@@ -2,16 +2,20 @@ import torch
 import torch.nn as nn
 
 weights = "runs/train/exp/weights/best.pt"
+np = 4
+colors = 4
+tags = 9
+
+
 ckpt = torch.load(weights, map_location="cpu")
 
 key = "ema" if ckpt.get("ema") else "model"
 
-nc = 4+9
-no = 9+4+9
+nc = colors + tags
+no = np*2 + 1 + colors + tags
 
 model = ckpt[key].float()
 for i, m in enumerate(model.model[-1].m):
-    print(m.out_channels)
     c = m.out_channels // 3
     conv = nn.Conv2d(m.in_channels, 3 * no, m.kernel_size)
     conv.weight.data = torch.cat([m.weight.data[0 * c:0 * c + no],

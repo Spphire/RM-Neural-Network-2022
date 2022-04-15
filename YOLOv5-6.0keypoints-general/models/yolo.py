@@ -37,10 +37,11 @@ class Detect(nn.Module):
     stride = None  # strides computed during build
     onnx_dynamic = False  # ONNX export parameter
 
-    def __init__(self, nc=36, anchors=(), ch=(), inplace=True):  # detection layer
+    def __init__(self, nc=36, anchors=(), ch=(), points_nums=4, inplace=True):  # detection layer
         super().__init__()
         self.nc = nc  # number of classes
-        self.no = nc + 9  # number of outputs per anchor
+        
+        self.no = nc + 1 + points_nums * 2  # number of outputs per anchor
         self.nl = len(anchors)  # number of detection layers
         self.na = len(anchors[0]) // 2  # number of anchors
         self.grid = [torch.zeros(1)] * self.nl  # init grid
@@ -51,15 +52,12 @@ class Detect(nn.Module):
         self.m = nn.ModuleList(nn.Conv2d(x, self.no * self.na, 1) for x in ch)  # output conv
         self.inplace = inplace  # use in-place ops (e.g. slice assignment)
 
-        #a = torch.tensor(anchors).float().view(self.nl, -1, 2)
-        #self.register_buffer('anchors', a)  # shape(nl,na,2)
-        #self.register_buffer('anchor_grid', a.clone().view(self.nl, -1, 1, 1, 2))  # shape(nl,na,1,1,2)
-        #self.anchor_grids = [self.anchor_grid[0], self.anchor_grid[1], self.anchor_grid[2]]
-        
     def forward(self, x):
         #if self.anchor_grids[0].device != self.anchor_grid.device:
         #    self.anchor_grids = [self.anchor_grid[0], self.anchor_grid[1], self.anchor_grid[2]]
         z = []  # inference output
+        points_nums = (self.no-self.nc-1)//2
+
         for i in range(self.nl):
             x[i] = self.m[i](x[i])  # conv
             
@@ -69,21 +67,14 @@ class Detect(nn.Module):
             if self.stride is not None:
                 if self.grid[i].shape[2:4] != x[i].shape[2:4] or self.onnx_dynamic:
                     self.grid[i], self.anchor_grid[i] = self._make_grid(nx, ny, i)
-                    
-                pt0, pt1, pt2, pt3, cls = x[i].split([2, 2, 2, 2, 1 + self.nc], dim=4)
+                #print(self.npts)
+                
+                pts = x[i].split([*[2]*points_nums, 1 + self.nc], dim=4)
 
                 if self.training:
-                    pt0 = pt0 * self.anchor_grid[i] / self.stride[i] + self.grid[i]
-                    pt1 = pt1 * self.anchor_grid[i] / self.stride[i] + self.grid[i]
-                    pt2 = pt2 * self.anchor_grid[i] / self.stride[i] + self.grid[i]
-                    pt3 = pt3 * self.anchor_grid[i] / self.stride[i] + self.grid[i]
+                    x[i] = torch.cat([   *[pts[k] * self.anchor_grid[i] / self.stride[i] + self.grid[i] for k in range(points_nums) ]  ,pts[-1]  ], dim = 4)
                 else:
-                    pt0 = pt0 * self.anchor_grid[i] + self.grid[i] * self.stride[i]
-                    pt1 = pt1 * self.anchor_grid[i] + self.grid[i] * self.stride[i]
-                    pt2 = pt2 * self.anchor_grid[i] + self.grid[i] * self.stride[i]
-                    pt3 = pt3 * self.anchor_grid[i] + self.grid[i] * self.stride[i]
-
-                x[i] = torch.cat([pt0, pt1, pt2, pt3, cls], dim=4)
+                    x[i] = torch.cat([   *[pts[k] * self.anchor_grid[i] + self.grid[i] * self.stride[i] for k in range(points_nums) ]  ,pts[-1]  ], dim = 4)
 
                 z.append(x[i].view(bs, -1, self.no))
 
@@ -99,7 +90,7 @@ class Detect(nn.Module):
         return grid, anchor_grid
 
 class Model(nn.Module):
-    def __init__(self, cfg='yolov5s.yaml', ch=3, nc=None, anchors=None):  # model, input channels, number of classes
+    def __init__(self, cfg='yolov5s.yaml', ch=3, nc=None, anchors=None, points_nums = 4):  # model, input channels, number of classes
         super().__init__()
         if isinstance(cfg, dict):
             self.yaml = cfg  # model dict
@@ -117,9 +108,10 @@ class Model(nn.Module):
         if anchors:
             LOGGER.info(f'Overriding model.yaml anchors with anchors={anchors}')
             self.yaml['anchors'] = round(anchors)  # override yaml value
-        self.model, self.save = parse_model(deepcopy(self.yaml), ch=[ch])  # model, savelist
+        self.model, self.save = parse_model(deepcopy(self.yaml), ch=[ch], points_nums=points_nums)  # model, savelist
         self.names = [str(i) for i in range(self.yaml['nc'])]  # default names
         self.inplace = self.yaml.get('inplace', True)
+        self.points_nums = points_nums
 
         # Build strides, anchors
         m = self.model[-1]  # Detect()
@@ -263,11 +255,11 @@ class Model(nn.Module):
         return self
 
 
-def parse_model(d, ch):  # model_dict, input_channels(3)
+def parse_model(d, ch, points_nums=4):  # model_dict, input_channels(3)
     LOGGER.info('\n%3s%18s%3s%10s  %-40s%-30s' % ('', 'from', 'n', 'params', 'module', 'arguments'))
     anchors, nc, gd, gw = d['anchors'], d['nc'], d['depth_multiple'], d['width_multiple']
     na = (len(anchors[0]) // 2) if isinstance(anchors, list) else anchors  # number of anchors
-    no = na * (nc + 5)  # number of outputs = anchors * (classes + 5)
+    no = na * (nc + points_nums*2 + 1)  # number of outputs = anchors * (classes + 9)
 
     layers, save, c2 = [], [], ch[-1]  # layers, savelist, ch out
     for i, (f, n, m, args) in enumerate(d['backbone'] + d['head']):  # from, number, module, args
@@ -297,6 +289,7 @@ def parse_model(d, ch):  # model_dict, input_channels(3)
             args.append([ch[x] for x in f])
             if isinstance(args[1], int):  # number of anchors
                 args[1] = [list(range(args[1] * 2))] * len(f)
+            args.append(points_nums)
         elif m is Contract:
             c2 = ch[f] * args[0] ** 2
         elif m is Expand:

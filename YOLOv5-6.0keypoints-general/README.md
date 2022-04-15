@@ -2,11 +2,27 @@
 
 针对robomaster装甲板自瞄修改后的YOLOv5-6.0目标检测网络，主要修改了以下几个部分：
 
-* 将外接矩形表示的目标修改为用装甲板4个顶点表示目标。修改了loss函数，改成关键点检测。同时修改了数据集的加载方式。
+* 将外接矩形表示的目标修改为用装甲板n个顶点表示目标。修改了loss函数，改成关键点检测。同时修改了数据集的加载方式。
 * 将目标分类从多个类别分为一类改成从多个类别分为两类，即颜色分一次类，图案标签分一次类。
 * 将COCO数据集作为负样本，加入训练数据中，可以起到降低误识别的作用。
 * 使用了yolov5n尺寸的模型
 
+**数据集脚本样例**
+```shell
+    dataset.yaml-> 
+
+        train: W:/net/ArmourData/4-9homo/images       #数据集图片路径
+        val: W:/net/ArmourData/4-9homo/images         #数据集图片路径
+
+        nc: 36                                        #数据集总种类个数
+        np: 4                                         #模型需要预测的顶点数n
+        colors: 4                                     #数据集按颜色分类类数
+        tags: 9                                       #数据集按图案标签分类类数
+        names: ['BG', 'B1', 'B2', 'B3', 'B4', 'B5', 'BO', 'BBs', 'BBb',
+                'RG', 'R1', 'R2', 'R3', 'R4', 'R5', 'RO', 'RBs', 'RBb',
+                'NG', 'N1', 'N2', 'N3', 'N4', 'N5', 'NO', 'NBs', 'NBb',
+                'PG', 'P1', 'P2', 'P3', 'P4', 'P5', 'PO', 'PBs', 'PBb',]
+```
 **训练**
 ```shell
     python3 train.py 
@@ -14,17 +30,17 @@
         --cfg models/yolov5n.yaml                     # 网络结构定义
         --data ~/Data//4-9homo/armor.yaml             # 训练数据文件
         --hyp data/hyp.scratch.yaml                   # 训练参数文件
-        --epochs 1000                                 # 训练500代(根据实际情况修改)
+        --epochs 1000                                 # 训练1000代(根据实际情况修改)
         --batch-size 16                               # 单次数据量(报错显存不足则需要降低)
         --img-size 640                                # 训练图片大小
-        --noval                                       # 关闭模型评估(4点模型val的代码没有做修改，用不了)
+        --noval                                       # 关闭模型评估(n点模型val的代码没有做修改，用不了)
         --adam                                        # 使用Adam优化器
         --workers 16                                  # 16进程并行加载数据集(根据电脑的CPU量进行修改)
         --negative-path ~/Data/COCO/unlabeled2017/    # 负样本文件夹(支持指定多个负样本文件夹，空格隔开即可)
 ```
 **种类数裁剪**
 ```shell
-    python3 cut.py                                    # 对训练后的模型进行裁剪(修改cut.py中的.pt路径)
+    python3 cut.py                                    # 对训练后的模型进行裁剪(需手动修改 weights,np,colors,tags)
 ```
 **测试/识别**
 ```shell
@@ -37,7 +53,7 @@
 
 **模型转化/部署**
 ```shell
-    python3 cut.py                                    # 对训练后的模型进行裁剪(修改cut.py中的.pt路径)
+    python3 cut.py                                    # 对训练后的模型进行裁剪(需手动修改 weights,np,colors,tags)
     python3 models/export.py 
         --weights runs/train/exp/weights/best-cut.pt  # 裁剪后得到的文件
         --img-size 384 640                            # 输入分辨率

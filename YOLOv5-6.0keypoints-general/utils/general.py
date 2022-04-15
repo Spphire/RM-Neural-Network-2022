@@ -70,6 +70,27 @@ class Timeout(contextlib.ContextDecorator):
         if self.suppress and exc_type is TimeoutError:  # Suppress TimeoutError
             return True
 
+def AttentionPrint(data):
+    print("")
+    print("Attention!!!!")
+    print("You should add an attribute 'np' 'colors' 'tags' in .yaml file of your dataset.")
+    print("       as the number of points you want to detect ")
+    print("       as the number of colors-class you want to detect ")
+    print("       as the number of tags-class you want to detect ")
+    print("")
+    print("For example in armour.yaml :")
+
+    print(" train: ", data)
+    print(" val: ~")
+    print(" nc: 36  # number of classes")
+    print(" np: 4   # number of points you want to detect")
+    print(" colors: 4 # number of rows  of the following [names]")
+    print(" tags: 9   # number of lines of the following [names]")
+    print(" names: ['BG', 'B1', 'B2', 'B3', 'B4', 'B5', 'BO', 'BBs', 'BBb',")
+    print("         'RG', 'R1', 'R2', 'R3', 'R4', 'R5', 'RO', 'RBs', 'RBb',")
+    print("         'NG', 'N1', 'N2', 'N3', 'N4', 'N5', 'NO', 'NBs', 'NBb',")
+    print("         'PG', 'P1', 'P2', 'P3', 'P4', 'P5', 'PO', 'PBs', 'PBb',]")
+    return
 
 def try_except(func):
     # try-except function. Usage: @try_except decorator
@@ -597,9 +618,9 @@ def scale_coords(img1_shape, coords, img0_shape, ratio_pad=None):
         gain = ratio_pad[0][0]
         pad = ratio_pad[1]
 
-    coords[:, [0, 2, 4, 6]] -= pad[0]  # x padding
-    coords[:, [1, 3, 5, 7]] -= pad[1]  # y padding
-    coords[:, :8] /= gain
+    coords[:, 0::2] -= pad[0]  # x padding
+    coords[:, 1::2] -= pad[1]  # y padding
+    coords[:, :] /= gain
     # clip_coords(coords, img0_shape)
     return coords
 
