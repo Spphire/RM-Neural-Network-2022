@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 from threading import Thread
 
+import cv2
 import numpy as np
 import torch
 from tqdm import tqdm
@@ -106,6 +107,10 @@ def run(data,
         plots=True,
         callbacks=Callbacks(),
         compute_loss=None,
+        num_points=4,
+        colors=4,
+        tags=9,
+        negative_path=[]
         ):
     # Initialize/load model and set device
     training = model is not None
@@ -176,17 +181,55 @@ def run(data,
 
         # Compute loss
         if compute_loss:
-            loss += compute_loss([x.float() for x in train_out], targets)[1]  # box, obj, cls
+            loss += compute_loss([x.float() for x in train_out], targets, colors, tags)[1,[0,2,3]]  # box, obj, cls
 
         # Run NMS
-        targets[:, 2:] *= torch.Tensor([width, height, width, height]).to(device)  # to pixels
+        targets[:, 2:] *= torch.Tensor([width, height]*num_points).to(device)  # to pixels
         lb = [targets[targets[:, 0] == i, 1:] for i in range(nb)] if save_hybrid else []  # for autolabelling
         t3 = time_sync()
-        out = non_max_suppression(out, conf_thres, iou_thres, labels=lb, multi_label=True, agnostic=single_cls)
+        # out = non_max_suppression(out, conf_thres, iou_thres, labels=lb, multi_label=True, agnostic=single_cls)
+        out8 = [] 
+        for p in out:
+            #print(p.shape)
+            mask = p[..., num_points*2] > opt.conf_thres
+            # print(torch.max(p[..., 8]).detach().cpu().item())
+            p = p[mask]
+            if p.shape[0] > 0:
+                #print(p[..., :8].numpy())
+                xmin = torch.min(p[..., 0:num_points*2:2], dim=1).values.int().numpy()
+                xmax = torch.max(p[..., 0:num_points*2:2], dim=1).values.int().numpy()
+                ymin = torch.min(p[..., 1:num_points*2:2], dim=1).values.int().numpy()
+                ymax = torch.max(p[..., 1:num_points*2:2], dim=1).values.int().numpy()
+                bbox = [[int(x1), int(y1), int(x2-x1), int(y2-y1)] for x1, x2, y1, y2 in zip(xmin, xmax, ymin, ymax)]
+                conf = [float(c) for c in p[..., num_points*2].numpy()]
+                cls_color = torch.argmax(p[..., num_points*2+1:num_points*2+1+colors], dim=-1).numpy()
+                cls_number = torch.argmax(p[..., num_points*2+1+colors:num_points*2+1+colors+tags], dim=-1).numpy()
+                cls = cls_color * tags + cls_number
+                ids = cv2.dnn.NMSBoxes(bbox, conf, conf_thres, iou_thres)
+                p = torch.stack([
+                    torch.cat([
+                        torch.tensor(p[i, :num_points*2]).float(), torch.tensor([conf[i]]).float(), torch.tensor([cls[i]]).float()
+                    ], dim=0)
+                    for i in ids.reshape(ids.shape[0])
+                ], dim=0)
+            out8.append(p)
+            print(out8[0][0])
+        
+        
         dt[2] += time_sync() - t3
 
         # Statistics per image
-        for si, pred in enumerate(out):
+        for si, pred in enumerate(out8):
+            pred8=pred
+
+            xmin = torch.min(pred[..., 0:num_points*2:2], dim=1).values.int().numpy()
+            xmax = torch.max(pred[..., 0:num_points*2:2], dim=1).values.int().numpy()
+            ymin = torch.min(pred[..., 1:num_points*2:2], dim=1).values.int().numpy()
+            ymax = torch.max(pred[..., 1:num_points*2:2], dim=1).values.int().numpy()
+            bbox = [[int(x1), int(y1), int(x2), int(y2)] for x1, x2, y1, y2 in zip(xmin, xmax, ymin, ymax)]
+            cls = torch.tensor(pred[:,2*num_points:]).float().clone()
+            pred = torch.cat([torch.tensor(bbox).float(), cls], dim=1)
+
             labels = targets[targets[:, 0] == si, 1:]
             nl = len(labels)
             tcls = labels[:, 0].tolist() if nl else []  # target class
@@ -206,7 +249,13 @@ def run(data,
 
             # Evaluate
             if nl:
-                tbox = xywh2xyxy(labels[:, 1:5])  # target boxes
+                txmin = torch.min(labels[:, 1::2], dim=1).values.int().numpy()
+                txmax = torch.max(labels[:, 1::2], dim=1).values.int().numpy()
+                tymin = torch.min(labels[:, 2::2], dim=1).values.int().numpy()
+                tymax = torch.max(labels[:, 2::2], dim=1).values.int().numpy()
+                boxt = [[int(x1), int(y1), int(x2), int(y2)] for x1, x2, y1, y2 in zip(txmin, txmax, tymin, tymax)]
+                tbox = torch.tensor(boxt).float()
+                # tbox = xywh2xyxy(labels[:, 1:5])  # target boxes
                 scale_coords(img[si].shape[1:], tbox, shape, shapes[si][1])  # native-space labels
                 labelsn = torch.cat((labels[:, 0:1], tbox), 1)  # native-space labels
                 correct = process_batch(predn, labelsn, iouv)

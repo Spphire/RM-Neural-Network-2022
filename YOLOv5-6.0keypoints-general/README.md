@@ -34,7 +34,7 @@
         --batch-size 16                               # 单次数据量(报错显存不足则需要降低)
         --img-size 640                                # 训练图片大小
         --noval                                       # 关闭模型评估(n点模型val的代码没有做修改，用不了)
-        --adam                                        # 使用Adam优化器
+        --adam                                        # 使用Adam优化器(不建议，收敛效果不佳)
         --workers 16                                  # 16进程并行加载数据集(根据电脑的CPU量进行修改)
         --negative-path ~/Data/COCO/unlabeled2017/    # 负样本文件夹(支持指定多个负样本文件夹，空格隔开即可)
 ```
